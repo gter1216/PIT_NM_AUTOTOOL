@@ -13,7 +13,8 @@
             "cwd": "${fileDirname}",  // 设置工作目录为当前文件(F5运行main.py 时就是main.py的目录)的目录
                                       // 跟 from ... import ... 没有关系，跟 open 文件有关系 
             "args": [
-                // "${command:pickArgs}"
+                "--vehicle", "TEST_22_2E"
+                // "--vehicle", "TEST_31"
             ],
             "env": {
                 // 这个配置是为了单独跑 developer.py // 跟 open 没有关系，跟import from 有关系

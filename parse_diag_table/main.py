@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 -------------------------------------------------
-   NIO PIT 自动化工具
+   NIO PIT UDS 自动化工具
    Author:  Charles Xu (charles.xu2@nio.com)
    Company: NIO
    Created: 2025-02-25 | Version: 1.0
@@ -16,90 +16,52 @@
 -------------------------------------------------
 """
 
-
-import re
 import os
 import sys
+import argparse
+import re
 import pandas as pd
-from config import CURR_REL_DIR, LAST_REL_DIR, OUTPUT_DIR, SOURCE_SHEET1, SOURCE_SHEET2, TARGET_SHEET
-from utils import read_excel, save_excel
-from main_process import main_process
+# 添加项目根目录到 Python 路径
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from parse_diag_table.config import (
+    VEHICLE_TYPE,
+    SOURCE_SHEET1, SOURCE_SHEET2, SOURCE_SHEET3,
+    TARGET_SHEET1, TARGET_SHEET2,
+    get_data_dirs
+)
+from parse_diag_table.utils import read_excel, save_excel
+from parse_diag_table.main_process_22_2E import main_process_22_2E,pre_process_22_2E
+from parse_diag_table.main_process_31 import main_process_31,pre_process_31,save_excel_with_merged_cells
 import numpy as np
 
 
-# 读取 Excel 文件并做预处理
-def pre_process(source_file, target_file, output_file):
-    source_df1 = read_excel(source_file, SOURCE_SHEET1)
-    source_df2 = read_excel(source_file, SOURCE_SHEET2)
-    target_df = read_excel(target_file, TARGET_SHEET)
-
-    # 提取 source_did_list
-    source_did_list = []
-    for value in source_df1.iloc[:, 0].dropna().astype(str):
-        if value.startswith("0x"):
-            source_did_list.append(value.replace("0x", ""))
-   
-    for value in source_df2.iloc[:, 0].dropna().astype(str):
-        if value.startswith("0x"):
-            source_did_list.append(value.replace("0x", ""))
-
-    length = source_did_list
-
-    print(f'source DID len: {len(source_did_list)}; \nsource DID: {', '.join(source_did_list)}')
-
-    #  for value in source_df2.iloc[:, 0].dropna().astype(str):
-    #      if re.fullmatch(r"[a-zA-Z0-9]+", value):
-    #          source_did_list.add(value.replace("0x", ""))
-    
-    # 提取 target_did_list
-    target_did_list = {}
-    for idx, value in enumerate(target_df.iloc[:, 0].dropna().astype(str)):
-       if re.fullmatch(r"[a-zA-Z0-9]+", value):
-         target_did_list[value] = idx
-    print(f'target DID len: {len(target_did_list)}; \ntarget DID: {', '.join(map(str, target_did_list.values()))}')
-
-    # 进行比对和更新
-    new_rows = []
-    removed_indices = []
-    
-    for value in source_did_list:
-        if value not in target_did_list:
-            print(f"新增: {value}")
-            new_rows.append(value)
-    
-    for value, idx in list(target_did_list.items()):
-        if value not in source_did_list:
-            print(f"删除: {value}")
-            removed_indices.append(idx)
-    
-    # 添加新行
-    sel_col = "A"
-    sel_col_idx = ord(sel_col) - ord('A')
-
-    for value in new_rows:
-        new_row = [np.nan] * len(target_df.columns)  # 生成全 NaN 行
-        new_row[sel_col_idx] = value  # 只填充 A 列 也就是 DID
-        target_df.loc[len(target_df)] = new_row  # 追加新行
-
-    # 删除不存在的行
-    target_df.drop(removed_indices, inplace=True)
-    target_df.reset_index(drop=True, inplace=True)
-
-    save_excel(target_df, output_file, sheet_name=TARGET_SHEET)
-    print("Excel 文件已更新。")
-    
-    return source_df1, source_df2, target_df
-
 # 主函数
-def process_file(source_file, target_file, output_file):
-    source_df1, source_df2, target_df = pre_process(source_file, target_file, output_file)
+def process_22_2E(source_file, target_file):
+    print(f"Begin to process 22 and 2E sheet")
+    source_df1, source_df2, target_df = pre_process_22_2E(source_file, target_file)
 
     for idx, row in target_df.iterrows():
         # print(row.iloc[0])
-        main_process(row.iloc[0], source_df1, source_df2, target_df, idx)
+        main_process_22_2E(row.iloc[0], source_df1, source_df2, target_df, idx)
     
-    save_excel(target_df, output_file, sheet_name=TARGET_SHEET)
-    print(f"Updated file saved to {output_file}")
+    print(f"Finished process 22 and 2E sheet")
+    return target_df
+
+def process_31(source_file, target_file):
+    print(f"Begin to process 31 sheet")
+    source_df, target_df = pre_process_31(source_file, target_file)
+    # 处理每个 Routine Control ID 的具体数据
+    for idx in range(0, len(target_df), 3):  # 每三行处理一次
+        rid = target_df.iloc[idx, 0]  # A列 Routine Control ID
+        if pd.notna(rid):  # 确保不是空值
+            main_process_31(source_df, target_df, rid)
+    
+    # 保存处理后的数据到 Excel，并合并单元格
+    save_excel_with_merged_cells(target_df, target_file, TARGET_SHEET2)
+    
+    print(f"Finished process 31 sheet")
+    return target_df
 
 def get_excel_files(directory):
     """ 获取目录下所有 Excel 文件（忽略临时文件 `~$` 开头的文件） """
@@ -108,21 +70,52 @@ def get_excel_files(directory):
 
 def main():
     """ 处理多个 Excel 文件 """
-    source_files = get_excel_files(CURR_REL_DIR)
-    target_files = get_excel_files(LAST_REL_DIR)
+    # 设置命令行参数
+    parser = argparse.ArgumentParser(description='NIO PIT UDS 自动化工具')
+    parser.add_argument('--vehicle', type=str, help='车辆类型 (例如: BLANC_RL201, CETUS_RL201)')
+    args = parser.parse_args()
+    
+    # 确定使用的车辆类型
+    vehicle_type = args.vehicle if args.vehicle else VEHICLE_TYPE
+    print(f"使用车辆类型: {vehicle_type}")
+    
+    # 获取数据目录路径
+    curr_rel_dir, last_rel_dir, output_dir = get_data_dirs(vehicle_type)
+    
+    # 确保输出目录存在
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 检查源目录和目标目录是否存在
+    if not os.path.exists(curr_rel_dir):
+        raise FileNotFoundError(f"源目录不存在: {curr_rel_dir}")
+    if not os.path.exists(last_rel_dir):
+        raise FileNotFoundError(f"目标目录不存在: {last_rel_dir}")
+    
+    source_files = get_excel_files(curr_rel_dir)
+    target_files = get_excel_files(last_rel_dir)
 
     if len(source_files) != len(target_files):
         raise ValueError("错误：新版本和旧版本文件数量不匹配，请检查文件夹内容。")
-        # sys.exit(1)
 
-    output_files = [os.path.join(OUTPUT_DIR, os.path.basename(f).replace(".xlsx", "_更新后.xlsx")) for f in target_files]
+    output_files = [os.path.join(output_dir, os.path.basename(f).replace(".xlsx", "_更新后.xlsx")) for f in target_files]
 
     for i in range(len(source_files)):
+        print(f"####开始处理### \n标准诊断表：{source_files[i]} \n模板诊断表：{target_files[i]}")
         source_file = source_files[i]
         target_file = target_files[i]
         output_file = output_files[i]
 
-        process_file(source_file, target_file, output_file)
+        # 处理 22 和 2E 相关的内容
+        target_df_22_2E = process_22_2E(source_file, target_file)
+        
+        # 处理 RoutineControl 0x31 相关的内容
+        target_df_31 = process_31(source_file, target_file)
+        
+        # 保存所有处理结果
+        save_excel(target_df_22_2E, output_file, sheet_name=TARGET_SHEET1, mode="w")
+        # save_excel(target_df_31, output_file, sheet_name=TARGET_SHEET2, mode="a")
+        save_excel_with_merged_cells(target_df_31, output_file, TARGET_SHEET2)
+        print(f"处理完毕, 所有处理结果已保存到: {output_file}")
 
         # 处理完当前文件后，提示用户是否继续
         user_input = input(f"文件 {source_file} 处理完毕，是否继续处理下一个文件？(y/n): ").strip().lower()
